@@ -37,3 +37,13 @@
         name: docker-compose
         state: latest
         update_cache: true
+        
+    - name: Check for docker group
+      ansible.builtin.group:
+        name: docker
+        state: present
+
+    - name: Add user to Docker group
+      ansible.builtin.user:
+        name: eelko
+        group: docker
