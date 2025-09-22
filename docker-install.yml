@@ -1,4 +1,57 @@
-- name: Install Docker via convenience script
+---
+- name: Install Docker on Debian/Ubuntu (safe + simple)
+  hosts: web
   become: true
-  shell: curl -fsSL https://get.docker.com | sh
-  args: { warn: false }
+  gather_facts: false   # we fix Python first, daarna facts
+
+  vars:
+    docker_users: []    # override via Environment (JSON), bv ["debian","ubuntu"]
+
+  pre_tasks:
+    - name: Ensure Python 3 is present for Ansible modules
+      raw: test -x /usr/bin/python3 || (apt-get update -y && apt-get install -y python3)
+      changed_when: false
+
+    - name: Gather facts (now that python3 exists)
+      setup:
+
+  tasks:
+    - name: Remove conflicting Debian docker packages (just in case)
+      apt:
+        name:
+          - docker.io
+          - docker-doc
+          - containerd
+          - runc
+        state: absent
+        purge: true
+      ignore_errors: true
+
+    # Snelste en meest compatibele route voor bookworm:
+    - name: Install Docker via official convenience script
+      shell: curl -fsSL https://get.docker.com | sh
+      args:
+        warn: false
+
+    - name: Ensure Docker is enabled and running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add users to docker group (optional)
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_users }}"
+      when: docker_users | length > 0
+
+    - name: Show docker version
+      command: docker --version
+      register: docker_ver
+      changed_when: false
+
+  post_tasks:
+    - debug:
+        msg: "Installed: {{ docker_ver.stdout | default('n/a') }}"
