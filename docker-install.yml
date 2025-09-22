@@ -1,46 +1,86 @@
 ---
-- name: Install Docker on Debian/Ubuntu (Bookworm-safe)
-  hosts: web            # pas aan naar jouw groep/host of gebruik --limit
+- name: Install Docker CE on Debian 12 (bookworm)
+  hosts: web
   become: true
-  gather_facts: false   # we fixen Python eerst, dan facts
+  gather_facts: false   # python eerst fixen, dan facts
 
   vars:
-    # Zet hier users die zonder sudo 'docker' mogen draaien, bv. ["debian","ubuntu"]
+    # welke users in de 'docker' groep moeten
     docker_users: []
-    # (optioneel) forceren van de interpreter
-    ansible_python_interpreter: /usr/bin/python3
 
   pre_tasks:
     - name: Ensure Python 3 is present for Ansible modules
       raw: test -x /usr/bin/python3 || (apt-get update -y && apt-get install -y python3)
       changed_when: false
 
-    - name: Gather facts (now that python3 exists)
+    - name: Gather facts
       setup:
 
   tasks:
-    - name: Remove conflicting Debian docker packages (avoid collisions)
+    - name: Remove Debian docker packages (avoid conflicts)
       apt:
-        name:
-          - docker.io
-          - docker-doc
-          - containerd
-          - runc
+        name: [docker.io, docker-doc, containerd, runc]
         state: absent
-        purge: true
+        purge: yes
       ignore_errors: true
 
-    - name: Install Docker via official convenience script (idempotent)
+    - name: Install prerequisites
+      apt:
+        name: [ca-certificates, curl, gnupg, lsb-release]
+        state: present
+        update_cache: yes
+
+    - name: Ensure keyrings dir exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Docker’s official GPG key (idempotent)
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+        | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker APT repo for bookworm
+      copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: '0644'
+        content: |
+          deb [arch={{ {'x86_64':'amd64','aarch64':'arm64','armv7l':'armhf'}[ansible_architecture] | default(ansible_architecture) }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable
+
+    - name: Update apt cache (Docker repo)
+      apt:
+        update_cache: yes
+
+    - name: Verify docker-ce candidate exists
+      shell: apt-cache policy docker-ce | awk '/Candidate:/{print $2}'
+      register: docker_candidate
+      changed_when: false
+
+    - name: Install Docker CE + plugins
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+      when: docker_candidate.stdout != "(none)"
+
+    # Fallback – alleen als de repo om wat voor reden dan ook geen candidate heeft
+    - name: Install Docker via official convenience script (fallback)
       ansible.builtin.shell: |
         set -euo pipefail
         curl -fsSL https://get.docker.com | sh
       args:
         executable: /bin/bash
-        creates: /usr/bin/docker         # skip als Docker al aanwezig is
-      environment:
-        DEBIAN_FRONTEND: noninteractive
+      when: docker_candidate.stdout == "(none)"
 
-    - name: Ensure Docker is enabled and running
+    - name: Enable & start Docker
       service:
         name: docker
         state: started
