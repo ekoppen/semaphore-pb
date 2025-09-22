@@ -1,25 +1,28 @@
 ---
-- name: Install Docker CE on Debian 12 (bookworm)
+- name: Install Docker on Debian 12 (bookworm) with repo + fallback
   hosts: web
   become: true
   gather_facts: false   # python eerst fixen, dan facts
 
   vars:
-    # welke users in de 'docker' groep moeten
-    docker_users: []
+    docker_users: []    # bv. ["debian","ubuntu"] om hen aan de 'docker' groep toe te voegen
 
   pre_tasks:
     - name: Ensure Python 3 is present for Ansible modules
       raw: test -x /usr/bin/python3 || (apt-get update -y && apt-get install -y python3)
       changed_when: false
 
-    - name: Gather facts
+    - name: Gather facts (now that python3 exists)
       setup:
 
   tasks:
-    - name: Remove Debian docker packages (avoid conflicts)
+    - name: Remove Debian's docker packages (avoid conflicts)
       apt:
-        name: [docker.io, docker-doc, containerd, runc]
+        name:
+          - docker.io
+          - docker-doc
+          - containerd
+          - runc
         state: absent
         purge: yes
       ignore_errors: true
@@ -44,23 +47,29 @@
       args:
         creates: /etc/apt/keyrings/docker.gpg
 
+    # Gebruik de daadwerkelijke dpkg-architectuur (amd64/arm64/armhf, etc.)
+    - name: Detect dpkg architecture
+      command: dpkg --print-architecture
+      register: deb_arch
+      changed_when: false
+
     - name: Add Docker APT repo for bookworm
       copy:
         dest: /etc/apt/sources.list.d/docker.list
         mode: '0644'
         content: |
-          deb [arch={{ {'x86_64':'amd64','aarch64':'arm64','armv7l':'armhf'}[ansible_architecture] | default(ansible_architecture) }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable
+          deb [arch={{ deb_arch.stdout }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable
 
     - name: Update apt cache (Docker repo)
       apt:
         update_cache: yes
 
-    - name: Verify docker-ce candidate exists
+    - name: Check docker-ce candidate
       shell: apt-cache policy docker-ce | awk '/Candidate:/{print $2}'
       register: docker_candidate
       changed_when: false
 
-    - name: Install Docker CE + plugins
+    - name: Install Docker CE + plugins (APT)
       apt:
         name:
           - docker-ce
@@ -69,16 +78,16 @@
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
-      when: docker_candidate.stdout != "(none)"
+      when: docker_candidate.stdout is defined and docker_candidate.stdout != "(none)"
 
-    # Fallback – alleen als de repo om wat voor reden dan ook geen candidate heeft
-    - name: Install Docker via official convenience script (fallback)
+    - name: Install Docker via convenience script (fallback)
       ansible.builtin.shell: |
         set -euo pipefail
         curl -fsSL https://get.docker.com | sh
       args:
         executable: /bin/bash
-      when: docker_candidate.stdout == "(none)"
+        creates: /usr/bin/docker
+      when: docker_candidate.stdout is not defined or docker_candidate.stdout == "(none)"
 
     - name: Enable & start Docker
       service:
