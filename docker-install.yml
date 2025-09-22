@@ -1,3 +1,4 @@
+---
 - name: Install Docker on Debian/Ubuntu (Bookworm-safe)
   hosts: web            # pas aan naar jouw groep/host of gebruik --limit
   become: true
@@ -16,68 +17,48 @@
 
     - name: Gather facts (now that python3 exists)
       setup:
-      
+
   tasks:
-    - name: Install apt-transport-https
-      ansible.builtin.apt:
+    - name: Remove conflicting Debian docker packages (avoid collisions)
+      apt:
         name:
-          - apt-transport-https
-          - ca-certificates
-          - lsb-release
-          - gnupg
-        state: latest
-        update_cache: true
+          - docker.io
+          - docker-doc
+          - containerd
+          - runc
+        state: absent
+        purge: true
+      ignore_errors: true
 
-    - name: Add signing key
-      ansible.builtin.apt_key:
-        url: "https://download.docker.com/linux/{{ ansible_os_family | lower }}/gpg"
-        state: present
+    - name: Install Docker via official convenience script (idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://get.docker.com | sh
+      args:
+        executable: /bin/bash
+        creates: /usr/bin/docker         # skip als Docker al aanwezig is
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
-    - name: Get DEB architecture
-      shell: dpkg --print-architecture
-      register: deb_architecture
-
-    - name: Check distribution
-      set_fact:
-        distribution: Debian
-        distribution_release: bullseye
-      when: ansible_distribution == "Kali" and ansible_distribution_release == "kali-rolling"
-
-    - name: Set default distribution values
-      set_fact:
-        distribution: "{{ ansible_distribution }}"
-        distribution_release: "{{ ansible_distribution_release }}"
-      when: distribution is not defined and distribution_release is not defined
-    
-    - name: Add repository into sources list
-      ansible.builtin.apt_repository:
-        repo: "deb [arch={{ deb_architecture.stdout }}] https://download.docker.com/linux/{{ distribution | lower }} {{ distribution_release }} stable"
-        state: present
-        filename: docker
-
-    - name: Install Docker
-      ansible.builtin.apt:
-        name:
-          - docker-ce
-          - docker-ce-cli
-          - containerd.io
-          - docker-compose
-          - docker-compose-plugin
-        state: latest
-        update_cache: true
-
-    - name: Start and enable service docker
-      ansible.builtin.service:
+    - name: Ensure Docker is enabled and running
+      service:
         name: docker
-        enabled: yes
         state: started
+        enabled: yes
 
-    - name: Create docker group
-      group:
-        name: "{{ docker_group }}"
-        state: present
-
-    - name: Add user to docker group
+    - name: Add users to docker group (optional)
       user:
-        name: "{{ ansible_user }}"
-        group: "{{ docker_group }}"
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_users }}"
+      when: docker_users | length > 0
+
+    - name: Show Docker version
+      command: docker --version
+      register: docker_ver
+      changed_when: false
+
+  post_tasks:
+    - debug:
+        msg: "Installed: {{ docker_ver.stdout | default('n/a') }}"
