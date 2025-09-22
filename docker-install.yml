@@ -1,11 +1,14 @@
 ---
-- name: Install Docker on Debian/Ubuntu (safe + simple)
-  hosts: web
+- name: Install Docker on Debian/Ubuntu (Bookworm-safe)
+  hosts: web            # pas aan naar jouw groep/host of gebruik --limit
   become: true
-  gather_facts: false   # we fix Python first, daarna facts
+  gather_facts: false   # we fixen Python eerst, dan facts
 
   vars:
-    docker_users: []    # override via Environment (JSON), bv ["debian","ubuntu"]
+    # Zet hier users die zonder sudo 'docker' mogen draaien, bv. ["debian","ubuntu"]
+    docker_users: []
+    # (optioneel) forceren van de interpreter
+    ansible_python_interpreter: /usr/bin/python3
 
   pre_tasks:
     - name: Ensure Python 3 is present for Ansible modules
@@ -16,7 +19,7 @@
       setup:
 
   tasks:
-    - name: Remove conflicting Debian docker packages (just in case)
+    - name: Remove conflicting Debian docker packages (avoid collisions)
       apt:
         name:
           - docker.io
@@ -27,11 +30,15 @@
         purge: true
       ignore_errors: true
 
-    # Snelste en meest compatibele route voor bookworm:
-    - name: Install Docker via official convenience script
-      shell: curl -fsSL https://get.docker.com | sh
+    - name: Install Docker via official convenience script (idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL https://get.docker.com | sh
       args:
-        warn: false
+        executable: /bin/bash
+        creates: /usr/bin/docker         # skip als Docker al aanwezig is
+      environment:
+        DEBIAN_FRONTEND: noninteractive
 
     - name: Ensure Docker is enabled and running
       service:
@@ -47,7 +54,7 @@
       loop: "{{ docker_users }}"
       when: docker_users | length > 0
 
-    - name: Show docker version
+    - name: Show Docker version
       command: docker --version
       register: docker_ver
       changed_when: false
