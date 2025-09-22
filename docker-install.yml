@@ -1,8 +1,22 @@
-- hosts: "{{ HOSTS }}"
-  name: Install Docker
-  become: yes
+- name: Install Docker on Debian/Ubuntu (Bookworm-safe)
+  hosts: web            # pas aan naar jouw groep/host of gebruik --limit
+  become: true
+  gather_facts: false   # we fixen Python eerst, dan facts
+
   vars:
-    docker_group: docker
+    # Zet hier users die zonder sudo 'docker' mogen draaien, bv. ["debian","ubuntu"]
+    docker_users: []
+    # (optioneel) forceren van de interpreter
+    ansible_python_interpreter: /usr/bin/python3
+
+  pre_tasks:
+    - name: Ensure Python 3 is present for Ansible modules
+      raw: test -x /usr/bin/python3 || (apt-get update -y && apt-get install -y python3)
+      changed_when: false
+
+    - name: Gather facts (now that python3 exists)
+      setup:
+      
   tasks:
     - name: Install apt-transport-https
       ansible.builtin.apt:
